@@ -43,14 +43,15 @@ jobs:
           EOF
 
           cat > .env <<EOF
-          ZHIPU_API_KEY=${{ secrets.ZHIPU_API_KEY }}
-          ZHIPU_MODEL_VISION=glm-4.6v-flash
-          ZHIPU_MODEL_VISION_FALLBACK=glm-4v-flash
-          ZHIPU_MODEL_TEXT=glm-4.7-flash
+          NVIDIA_API_KEY=${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+          NVIDIA_MODEL_VISION=${{ vars.NVIDIA_MODEL_VISION || 'nvidia/nemotron-3.5-super-vl-120b-a12b' }}
+          NVIDIA_MODEL_VISION_FALLBACK=${{ vars.NVIDIA_MODEL_VISION_FALLBACK || 'z-ai/glm-5.3-flash' }}
+          NVIDIA_MODEL_TEXT=${{ vars.NVIDIA_MODEL_TEXT || 'z-ai/glm-5.3-flash' }}
           SCHEDULE_TIME=12:00
           HTTP_PROXY=${{ secrets.HTTP_PROXY }}
           USE_STATE_CACHE=false
-          EMAIL_NOTIFY_ENABLED=true
+          EMAIL_NOTIFY_ENABLED=false
           EMAIL_NOTIFY_POLICY=${{ vars.EMAIL_NOTIFY_POLICY || 'failure_only' }}
           EMAIL_SMTP_HOST=smtp.qq.com
           EMAIL_SMTP_USER=${{ secrets.EMAIL_SMTP_USER }}
@@ -61,7 +62,7 @@ jobs:
           CAPTCHA_EXTRA_ROUND_ENABLED=true
           CAPTCHA_EXTRA_ROUND_ATTEMPTS=3
           AI_CALL_MAX_RETRIES=2
-          AI_CELL_WORKERS=3
+          AI_CELL_WORKERS=2
           CHECKIN_MAX_RETRIES=5
           CHECKIN_RETRY_INTERVAL_SECONDS=30
           EOF

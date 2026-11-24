@@ -5,10 +5,13 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-from zhipuai import ZhipuAI
+from openai import OpenAI
 
 # 加载环境变量
 load_dotenv()
+
+# NVIDIA NIM 托管的 OpenAI 兼容端点
+DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 # 题目名称中常见的前缀噪声（模型偶尔会返回整句话）
 _TARGET_PREFIX_PATTERN = re.compile(
@@ -16,8 +19,11 @@ _TARGET_PREFIX_PATTERN = re.compile(
 )
 _TARGET_QUANTIFIER_PATTERN = re.compile(r'^(一个|一只|一张|一把|一条|一台|一辆|一双|一部|一副)')
 
-# 触发切换备用模型的错误特征：429（限流）、1305（模型繁忙）等
-_BUSY_ERROR_KEYWORDS = ("429", "1305", "rate limit", "too many requests", "overload", "繁忙", "限流")
+# 触发切换备用模型的错误特征：429（限流）、1305（模型繁忙）、5xx（服务端抖动）等
+_BUSY_ERROR_KEYWORDS = (
+    "429", "1305", "500", "502", "503",
+    "rate limit", "too many requests", "overload", "unavailable", "繁忙", "限流",
+)
 
 
 def is_model_busy_error(err):
@@ -56,11 +62,12 @@ class AIService:
 
     def __init__(self):
         """初始化AI服务，从环境变量读取配置"""
-        self.api_key = os.getenv("ZHIPU_API_KEY", "")
-        self.model_vision = os.getenv("ZHIPU_MODEL_VISION", "glm-4.6v-flash")
-        # 视觉备用模型：主模型限流/繁忙（429、1305）时自动切换
-        self.model_vision_fallback = os.getenv("ZHIPU_MODEL_VISION_FALLBACK", "glm-4v-flash")
-        self.model_text = os.getenv("ZHIPU_MODEL_TEXT", "glm-4.7-flash")
+        self.api_key = os.getenv("NVIDIA_API_KEY", "")
+        self.model_vision = os.getenv("NVIDIA_MODEL_VISION", "nvidia/nemotron-3.5-super-vl-120b-a12b")
+        # 视觉备用模型：主模型限流/繁忙（429、5xx）时自动切换
+        self.model_vision_fallback = os.getenv("NVIDIA_MODEL_VISION_FALLBACK", "z-ai/glm-5.3-flash")
+        self.model_text = os.getenv("NVIDIA_MODEL_TEXT", "z-ai/glm-5.3-flash")
+        self.base_url = (os.getenv("NVIDIA_BASE_URL", "") or DEFAULT_BASE_URL).strip()
 
         try:
             self.max_retries = max(0, int(os.getenv("AI_CALL_MAX_RETRIES", "2").strip()))
@@ -73,15 +80,21 @@ class AIService:
             self.cell_workers = 3
 
         if not self.api_key:
-            raise ValueError("未找到ZHIPU_API_KEY环境变量，请在.env文件中配置")
+            raise ValueError("未找到NVIDIA_API_KEY环境变量，请在.env文件中配置")
 
-        self.client = ZhipuAI(api_key=self.api_key)
+        # max_retries=0：重试由下面的 _chat 统一控制，避免两层重试叠加耗尽任务超时
+        self.client = OpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            timeout=120,
+            max_retries=0,
+        )
 
     # ---------------- 基础调用 ----------------
     def _chat(self, model, messages, fallback_model=None):
         """带重试的对话调用，返回纯文本；失败返回空串。
 
-        主模型遇到限流/模型繁忙（429、1305 等）时不再空转重试，立即切备用模型；
+        主模型遇到限流/模型繁忙（429、5xx 等）时不再空转重试，立即切备用模型；
         其它错误在主模型重试耗尽后也会兜底切到备用模型。
         """
         models = [model]
@@ -125,7 +138,7 @@ class AIService:
             return None
 
     def call_vision(self, image_bytes, prompt):
-        """调用智谱多模态模型，image_bytes 支持单张图或图片列表"""
+        """调用多模态模型，image_bytes 支持单张图或图片列表"""
         images = image_bytes if isinstance(image_bytes, (list, tuple)) else [image_bytes]
         content = [{"type": "text", "text": prompt}]
         for img in images:

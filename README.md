@@ -1,199 +1,123 @@
-# SakuraFRP Auto Checkin
+# SakuraFRP Auto Checkin（NVIDIA NIM 版）
 
-话不多说，直接上图：
+SakuraFRP 每日自动签到，GitHub Actions 定时运行，验证码识别走 NVIDIA NIM 的 OpenAI 兼容接口。
 
-<table>
-  <tr>
-    <td><img width="100%" alt="稳定签到成功" src="https://github.com/user-attachments/assets/34c9ce9a-95ad-49c5-81be-1aadfe69b91c" /></td>
-    <td><img width="100%" alt="多轮失败重试" src="https://github.com/user-attachments/assets/e543e7f3-524a-466c-bdcf-6c7ffe9f713c" /></td>
-    <td><img width="100%" alt="邮件内容展示" src="https://github.com/user-attachments/assets/7d6f766a-cfe0-497c-8a6d-ccd1ea0f4623" /></td>
-  </tr>
-  <tr>
-    <td align="center">（a）稳定签到成功</td>
-    <td align="center">（b）多轮失败重试</td>
-    <td align="center">（c）邮件内容展示</td>
-  </tr>
-</table>
+> 本仓库 fork 自 [XavierJiezou/SakuraFRP-Daily-Checkin](https://github.com/XavierJiezou/SakuraFRP-Daily-Checkin)，
+> 其原始项目为 [RyanStarFox/SakuraFRP_Auto_AI_check](https://github.com/RyanStarFox/SakuraFRP_Auto_AI_check)。
+> 本仓库在原版基础上更换了 AI 服务商，并默认关闭邮件通知。
 
----
+## 与上游的差异
 
-稳定版 SakuraFRP 自动签到脚本，支持：
+| 项目 | 上游 | 本仓库 |
+| --- | --- | --- |
+| AI 服务商 | 智谱 [open.bigmodel.cn](https://open.bigmodel.cn/) | NVIDIA NIM `https://integrate.api.nvidia.com/v1` |
+| SDK | `zhipuai>=2.0.0` | `openai>=1.0.0` |
+| 视觉模型 | `glm-4.6v-flash`，备用 `glm-4v-flash` | `nvidia/nemotron-3.5-super-vl-120b-a12b`，备用 `z-ai/glm-5.3-flash` |
+| 文本模型 | `glm-4.7-flash` | `z-ai/glm-5.3-flash` |
+| 邮件通知 | 默认 `failure_only` | 默认关闭（`EMAIL_NOTIFY_ENABLED=false`） |
+| 逐格并发 | `AI_CELL_WORKERS=3` | `2`（降低免费层触发限流的概率） |
 
-- Playwright 自动化登录与签到
-- 九宫格/滑块验证码处理
-- 单次执行内多轮重试
-- 成功/失败邮件通知
-- 本地运行 + GitHub Actions 每日定时运行
+功能本身未改动：Playwright 登录并签到、九宫格与滑块验证码识别、单次执行内多轮重试、失败时返回非零退出码、日志与截图上传为 artifact。
 
-原始项目参考链接：
+## GitHub Actions 使用
 
-- https://github.com/RyanStarFox/SakuraFRP_Auto_AI_check
+### 必需的 Secrets
 
-## 1. 功能概览
+`Settings` → `Secrets and variables` → `Actions` → `Secrets` → `New repository secret`
 
-当前版本重点在稳定性：
+| 名称 | 说明 |
+| --- | --- |
+| `SAKURA_USERNAME` | 樱花内网穿透账号 |
+| `SAKURA_PASSWORD` | 对应密码 |
+| `NVIDIA_API_KEY` | [build.nvidia.com/settings](https://build.nvidia.com/settings) 生成，形如 `nvapi-...` |
+| `HTTP_PROXY` | 可选，纯 curl 形式的代理地址，如 `http://127.0.0.1:7890` |
 
-- 严格签到成功判定，避免误报
-- 登录状态二次确认与自动补登录
-- 18+ 弹窗自动处理
-- 验证码失败自动重试
-- 失败退出码正确返回，便于调度层重试
+邮件相关的 `EMAIL_SMTP_USER` / `EMAIL_SMTP_PASSWORD` / `EMAIL_TO` 无需配置——本仓库已默认关闭邮件通知。
 
-## 2. 项目结构
+### 可选 Variables
 
-```text
-.
-├── main.py                  # 主程序
-├── ai_service.py            # AI 能力封装
-├── logger.py                # 日志记录器
-├── requirements.txt         # Python 依赖
-├── env.example              # 环境变量模板
-├── run_checkin.sh           # 本地/服务器执行脚本（含外层重试）
-├── generate_random_time.sh  # 本地随机时刻生成脚本
-├── logs/                    # 运行日志
-└── .github/workflows/       # GitHub Actions 工作流
-```
+`Settings` → `Secrets and variables` → `Actions` → `Variables` 标签。工作流里写作 `${{ vars.X || '默认值' }}`，**变量优先于代码默认值**，改完下一次运行即生效，无需改代码。
 
-## 3. 本地运行
+| 变量名 | 作用 | 默认 |
+| --- | --- | --- |
+| `NVIDIA_MODEL_VISION` | 九宫格 / 滑块的主视觉模型 | `nvidia/nemotron-3.5-super-vl-120b-a12b` |
+| `NVIDIA_MODEL_VISION_FALLBACK` | 主模型 429 / 5xx 时自动切换 | `z-ai/glm-5.3-flash` |
+| `NVIDIA_MODEL_TEXT` | 只吃文本的语义裁决 | `z-ai/glm-5.3-flash` |
+| `EMAIL_NOTIFY_POLICY` | 若重新开启邮件，控制打扰程度 | `failure_only` |
 
-### 3.1 安装依赖
+### 触发方式
+
+- **定时**：`cron: '7 4 * * *'`，即北京时间每天 12:07。避开整点可显著降低 GitHub 定时任务延迟或丢触发的概率。
+- **手动**：仓库 `Actions` 页 → 左侧 `SakuraFRP Daily Check-in` → `Run workflow`。
+
+一次运行成功后，日志与截图（`logs/`、`captcha_bg.png`、`checkin.png` 等）会作为 artifact 上传，保留 7 天。
+
+## 更换模型
+
+1. 先确认目标 id 真实存在（无需鉴权即可查）：
+
+   ```bash
+   curl -s https://integrate.api.nvidia.com/v1/models | grep -o '"id":"[^"]*"'
+   ```
+
+2. 在仓库 `Variables` 里新建或修改上表中的变量，值填完整的 model id。
+3. 下次运行自动采用。本地运行时则以 `.env` 为准（`.env` 里写了该键就覆盖代码默认值）。
+
+换模型时的四条约束：
+
+- id 必须与 `/v1/models` 返回的完全一致，格式为 `发布方/模型名`，点号与连字符原样保留（如 `z-ai/glm-5.3-flash`）。
+- 视觉模型必须支持图像输入（OpenAI 风格的 `image_url` 内容片段），文本模型无此要求。
+- 主模型与备用模型不要填成同一个，否则限流时没有兜底。
+- 免费试用层按模型有每分钟与每月 token 上限，超限返回 429，会自动切备用模型。
+
+## 本地运行
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
-```
 
-### 3.2 配置文件
-
-1. 复制环境变量模板
-
-```bash
-cp env.example .env
-```
-
-2. 创建账号文件 `account.txt`
-
-```text
-第一行: 用户名
-第二行: 密码
-```
-
-### 3.3 手动执行
-
-```bash
-source .venv/bin/activate
+cp env.example .env      # 填入 NVIDIA_API_KEY
+# account.txt 两行：第一行账号，第二行密码
 python main.py --both
 ```
 
-## 4. 关键配置
+## 项目结构
 
-在 `.env` 中常用配置如下：
+```text
+.
+├── main.py                     # 主程序：登录、验证码、签到
+├── ai_service.py               # NVIDIA NIM 调用封装（OpenAI 兼容）
+├── logger.py                   # 日志记录器
+├── requirements.txt            # Python 依赖
+├── env.example                 # 环境变量模板
+├── run_checkin.sh              # 本地/服务器执行脚本（含外层重试）
+├── run_scheduled.sh            # 定时执行包装脚本
+├── generate_random_time.sh     # 随机时刻生成脚本
+├── test.py                     # 本地环境自检脚本
+└── .github/workflows/checkin.yml
+```
 
-- `ZHIPU_API_KEY`: 智谱 API Key
-- `ZHIPU_MODEL_VISION`: 视觉模型（默认 `glm-4.6v-flash`）
-- `ZHIPU_MODEL_VISION_FALLBACK`: 视觉备用模型（默认 `glm-4v-flash`，主模型返回 429/1305 时自动切换）
-- `ZHIPU_MODEL_TEXT`: 文本模型（默认 `glm-4.7-flash`）
-- `AI_CALL_MAX_RETRIES`: AI 调用失败重试次数
-- `AI_CELL_WORKERS`: 九宫格逐格识别并发数（建议 2-4）
-- `USE_STATE_CACHE`: 是否复用 state 登录态（推荐 `false`）
-- `CAPTCHA_EXTRA_ROUND_ENABLED`: 验证码额外重试开关
-- `CAPTCHA_EXTRA_ROUND_ATTEMPTS`: 验证码额外重试次数
-- `CHECKIN_MAX_RETRIES`: 外层重试次数（建议 5）
-- `CHECKIN_RETRY_INTERVAL_SECONDS`: 外层重试间隔秒数（建议 30）
+## 常见问题
 
-### 4.1 验证码识别策略
+**AI 调用被限流（429）**
+主模型报 429 或 5xx 时会立刻切到备用模型，不再空转重试。若频繁触发，把 `NVIDIA_MODEL_VISION` 换成别的可用视觉模型，或调低 `AI_CELL_WORKERS`。
 
-九宫格识别按以下顺序推进，任一步命中即提交：
+**验证码连续失败**
+提高 `CHECKIN_MAX_RETRIES`（外层整轮重试）或 `CAPTCHA_EXTRA_ROUND_ATTEMPTS`（验证码额外轮次）；也可能是网络到目标站点不稳定，检查 `HTTP_PROXY`。
 
-1. 等待格子图片真正加载完成（`img.complete` + 容器不透明度稳定）后再截图
-2. 整图直选：把完整九宫格交给视觉模型，一次返回命中编号
-3. 回退逐格识别：切成 9 张单格图并发识别，再交文本模型做语义裁决
-4. 兜底名称匹配：目标与格子描述互为子串即命中
-5. 提交后校验，出现“验证失败”文案立即刷新换题，不浪费重试轮次
+**收不到邮件**
+本仓库默认 `EMAIL_NOTIFY_ENABLED=false`，这是有意为之。需要通知就把 workflow 里该行改成 `true`，并补 `EMAIL_SMTP_*` / `EMAIL_TO` 三个 Secrets。
 
-### 4.2 邮件通知策略
+**和上游同步冲突**
+本仓库已修改 `ai_service.py`、`requirements.txt`、`checkin.yml`，`Sync fork` 会产生冲突，上游更新需要手动挑取。
 
-用 `EMAIL_NOTIFY_POLICY` 控制打扰程度：
+## 许可与致谢
 
-| 取值 | 行为 |
-| --- | --- |
-| `none` | 从不发邮件 |
-| `failure_only` | **默认**，仅最终失败时发 |
-| `change` | 最终失败 + 当天首次签到成功；“今日已签到”不发 |
-| `all` | 每次运行都发（旧行为） |
+- 许可证沿用上游，见 [LICENSE](LICENSE)。
+- 感谢 [XavierJiezou](https://github.com/XavierJiezou) 与 [RyanStarFox](https://github.com/RyanStarFox) 的原始实现。
 
-另外两点：
+## 免责声明
 
-- 单次运行最多发一封邮件，失败邮件与连续失败告警邮件不再重复轰炸
-- `FAIL_ALERT_ENABLED` 默认改为 `false`。GitHub Actions runner 每次都是干净环境，
-  `alert_state.json` 无法跨天保留，连续失败计数在 CI 下本就不成立
-
-## 5. GitHub Actions 部署
-
-仓库内已提供工作流：
-
-- 文件: `.github/workflows/checkin.yml`
-- 触发方式:
-  - 每天定时执行
-  - 手动触发（workflow_dispatch）
-
-### 5.1 定时说明
-
-GitHub Actions 使用 UTC 时区。
-
-- 目标: 每天北京时间 12:00
-- 对应 cron: `0 4 * * *`
-
-### 5.2 需要配置的 Secrets
-
-在 GitHub 仓库 `Settings -> Secrets and variables -> Actions` 中添加：
-
-- `SAKURA_USERNAME`
-- `SAKURA_PASSWORD`
-- `ZHIPU_API_KEY`
-- `EMAIL_SMTP_USER`
-- `EMAIL_SMTP_PASSWORD`
-- `EMAIL_TO`
-- `HTTP_PROXY` (可选)
-
-工作流会基于这些 Secrets 动态生成运行时的 `.env` 和 `account.txt`。
-
-### 5.3 首次验证
-
-1. 打开 Actions 页面
-2. 手动运行 `SakuraFRP Daily Check-in`
-3. 检查 Job 日志
-4. 下载 artifacts 查看 `logs/` 与截图
-5. 确认邮件通知是否正常
-
-## 6. 安全建议
-
-- 不要把 `.env`、`account.txt`、`state.json` 提交到 Git
-- 不要在 Issue/日志中粘贴明文密钥
-- 建议定期轮换 API Key 与 SMTP 授权码
-
-## 7. 故障排查
-
-### 7.1 验证码连续失败
-
-- 增大 `CHECKIN_MAX_RETRIES`
-- 增大 `CAPTCHA_EXTRA_ROUND_ATTEMPTS`
-- 检查网络代理连通性
-
-### 7.2 邮件未收到
-
-- 检查 SMTP 授权码是否有效
-- 检查邮箱垃圾箱
-- 查看日志中 `邮件发送失败` 报错
-
-### 7.3 Actions 执行失败
-
-- 检查 Secrets 是否配置完整
-- 检查 Playwright 依赖安装日志
-- 下载 artifacts 查看 `logs/checkin_YYYY-MM-DD.log`
-
-## 8. 免责声明
-
-本项目仅用于个人学习与自动化实践。请遵守目标网站服务条款与当地法律法规。
+本项目仅用于个人学习与自动化实践。请遵守目标网站的服务条款与当地法律法规。

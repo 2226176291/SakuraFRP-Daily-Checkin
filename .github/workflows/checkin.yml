@@ -6,6 +6,7 @@ on:
     # 避开整点可显著降低 GitHub schedule 延迟/丢触发概率
     - cron: '7 4 * * *'
   workflow_dispatch:
+  push:
 
 concurrency:
   group: sakurafrp-daily-checkin
